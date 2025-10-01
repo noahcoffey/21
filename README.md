@@ -2,35 +2,39 @@
 
 ## Project Setup
 
-This repository is the initial setup for the Dakboard Clone project.
+This project aims to create a Dakboard clone with features such as an authentication system, a drag-and-drop UI for layout design, and a widget integration API.
 
-### Features
-- User authentication system with different user roles.
-- Drag-and-drop UI for layout design.
-- Widget integration API.
+### Initial Project Structure
 
-## Installation
+- **Authentication System**: Set up with user roles to manage access and permissions.
+- **Drag-and-Drop UI**: Initial setup for a flexible layout designer.
+- **Widget Integration API**: Basic structure for integrating external widgets.
+
+### Requirements
+- Follow Python best practices
+
+### Getting Started
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/dakboard-clone.git
+   git clone <repository-url>
    ```
 
-2. Navigate into the project directory:
+2. Navigate to the project directory:
    ```bash
    cd dakboard-clone
    ```
 
-3. Install the required dependencies:
+3. Install the requirements:
    ```bash
    pip install -r requirements.txt
    ```
 
-4. Run the application:
+4. Run the initial setup:
    ```bash
-   python app.py
+   python manage.py migrate
    ```
 
-## Contributing
+### Contributing
 
-Feel free to submit issues or pull requests.
+Please read `CONTRIBUTING.md` for details on our code of conduct, and the process for submitting pull requests.
