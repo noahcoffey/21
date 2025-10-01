@@ -1,26 +1,12 @@
-import argparse
+from __future__ import annotations
+
 import random
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import List, Tuple, Optional
 
 
-SUITS = ["♠", "♥", "♦", "♣"]
-RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
-RANK_VALUES = {
-    "A": 11,
-    "2": 2,
-    "3": 3,
-    "4": 4,
-    "5": 5,
-    "6": 6,
-    "7": 7,
-    "8": 8,
-    "9": 9,
-    "10": 10,
-    "J": 10,
-    "Q": 10,
-    "K": 10,
-}
+SUITS = ["\u2660", "\u2665", "\u2666", "\u2663"]  # Spades, Hearts, Diamonds, Clubs
+RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 
 
 @dataclass(frozen=True)
@@ -28,16 +14,48 @@ class Card:
     rank: str
     suit: str
 
-    def value(self) -> int:
-        return RANK_VALUES[self.rank]
-
     def __str__(self) -> str:
         return f"{self.rank}{self.suit}"
 
 
-@dataclass
+class Deck:
+    """Represents a multi-deck shoe with reshuffle support."""
+
+    def __init__(self, num_decks: int = 6, reshuffle_threshold: int = 15) -> None:
+        if num_decks <= 0:
+            raise ValueError("num_decks must be >= 1")
+        if reshuffle_threshold <= 0:
+            raise ValueError("reshuffle_threshold must be >= 1")
+        self.num_decks = num_decks
+        self.reshuffle_threshold = reshuffle_threshold
+        self._cards: List[Card] = []
+        self.reshuffle()
+
+    def _build_shoe(self) -> List[Card]:
+        return [Card(rank, suit) for _ in range(self.num_decks) for suit in SUITS for rank in RANKS]
+
+    def reshuffle(self) -> None:
+        self._cards = self._build_shoe()
+        random.shuffle(self._cards)
+
+    def draw(self) -> Card:
+        if not self._cards:
+            # As a safeguard, rebuild the shoe if unexpectedly empty mid-round
+            self.reshuffle()
+        return self._cards.pop()
+
+    def cards_remaining(self) -> int:
+        return len(self._cards)
+
+    def needs_reshuffle(self) -> bool:
+        return self.cards_remaining() < self.reshuffle_threshold
+
+
 class Hand:
-    cards: List[Card] = field(default_factory=list)
+    """Represents a blackjack hand and computes totals with soft handling."""
+
+    def __init__(self) -> None:
+        self.cards: List[Card] = []
 
     def add_card(self, card: Card) -> None:
         self.cards.append(card)
@@ -45,315 +63,276 @@ class Hand:
     def clear(self) -> None:
         self.cards.clear()
 
-    def values(self) -> int:
-        total = 0
+    def values(self) -> Tuple[int, bool]:
+        """Return best total <= 21 if possible, and whether it's soft (i.e., an Ace counted as 11)."""
+        total_without_aces = 0
         aces = 0
         for c in self.cards:
-            v = c.value()
-            total += v
             if c.rank == "A":
                 aces += 1
-        # Adjust Aces from 11 to 1 as needed
-        while total > 21 and aces > 0:
-            total -= 10
-            aces -= 1
-        return total
+            elif c.rank in {"J", "Q", "K"}:
+                total_without_aces += 10
+            else:
+                total_without_aces += int(c.rank)
 
-    def is_blackjack(self) -> bool:
-        return len(self.cards) == 2 and self.values() == 21
+        # Count all aces as 1 initially
+        base_total = total_without_aces + aces
+        best_total = base_total
+        is_soft = False
 
-    def is_bust(self) -> bool:
-        return self.values() > 21
+        # Try to upgrade some aces to 11 (i.e., add 10 for each such ace) while <= 21
+        # Choose the largest possible total <= 21
+        for elevate in range(aces + 1):
+            total = base_total + elevate * 10
+            if total <= 21 and total >= best_total:
+                best_total = total
+                is_soft = elevate > 0
+        # If all totals > 21, keep the minimal (all aces as 1)
+        if best_total > 21:
+            best_total = base_total
+            is_soft = False
+        return best_total, is_soft
+
+    def total(self) -> int:
+        return self.values()[0]
 
     def is_soft(self) -> bool:
-        # Soft hand if an Ace is counted as 11 in best total
-        total = 0
-        aces = 0
-        for c in self.cards:
-            total += c.value()
-            if c.rank == "A":
-                aces += 1
-        # Reduce while bust
-        while total > 21 and aces > 0:
-            total -= 10
-            aces -= 1
-        # If there remains an Ace counted as 11, it's soft
-        return any(card.rank == "A" for card in self.cards) and total <= 21 and any(
-            # Recompute if making one Ace 1 reduces total by 10 but still keeps <= 21
-            # If after reductions, if there was at least one Ace not reduced, that's soft
-            True for _ in ()
-        ) and self._has_ace_counted_as_11()
+        return self.values()[1]
 
-    def _has_ace_counted_as_11(self) -> bool:
-        total = 0
-        aces = 0
-        for c in self.cards:
-            total += c.value()
-            if c.rank == "A":
-                aces += 1
-        # Reduce as needed
-        reduced = 0
-        while total > 21 and aces > 0:
-            total -= 10
-            aces -= 1
-            reduced += 1
-        # If there are remaining aces not reduced, one is 11
-        return any(card.rank == "A" for card in self.cards) and aces > 0
+    def is_blackjack(self) -> bool:
+        return len(self.cards) == 2 and self.total() == 21
+
+    def is_bust(self) -> bool:
+        return self.total() > 21
 
     def __str__(self) -> str:
-        return ", ".join(str(c) for c in self.cards)
+        return " ".join(str(c) for c in self.cards)
 
 
-class Deck:
-    def __init__(self, num_decks: int = 6) -> None:
-        if num_decks <= 0:
-            raise ValueError("num_decks must be positive")
-        self.num_decks = num_decks
-        self.cards: List[Card] = []
-        self._reset()
-
-    def _reset(self) -> None:
-        self.cards = [Card(rank, suit) for _ in range(self.num_decks) for suit in SUITS for rank in RANKS]
-        random.shuffle(self.cards)
-
-    def need_reshuffle(self) -> bool:
-        return len(self.cards) < 15
-
-    def reshuffle(self) -> None:
-        print("[Deck] Reshuffling shoe...")
-        self._reset()
-
-    def deal(self) -> Card:
-        if self.need_reshuffle():
-            self.reshuffle()
-        return self.cards.pop()
-
-
-@dataclass
 class Player:
-    name: str
-    chips: int
-    hand: Hand = field(default_factory=Hand)
-    bet: int = 0
+    def __init__(self, name: str, bankroll: float) -> None:
+        if bankroll < 0:
+            raise ValueError("bankroll must be non-negative")
+        self.name = name
+        self.bankroll: float = bankroll
+        self.hand = Hand()
+        self.current_bet: float = 0.0
 
-    def place_bet(self, amount: int) -> None:
+    def clear_hand(self) -> None:
+        self.hand.clear()
+        self.current_bet = 0.0
+
+    def place_bet(self, amount: float) -> None:
         if amount <= 0:
-            raise ValueError("Bet must be positive")
-        if amount > self.chips:
-            raise ValueError("Bet cannot exceed available chips")
-        self.bet = amount
-        self.chips -= amount
+            raise ValueError("Bet must be greater than zero")
+        if amount > self.bankroll:
+            raise ValueError("Bet cannot exceed bankroll")
+        self.bankroll -= amount
+        self.current_bet = amount
 
-    def win(self) -> None:
-        # Regular win: pay 1:1, return bet + winnings
-        self.chips += self.bet * 2
-        self.bet = 0
+    def settle_win(self) -> None:
+        # Payout 1:1 (return bet + win equal to bet)
+        self.bankroll += self.current_bet * 2.0
+        self.current_bet = 0.0
 
-    def push(self) -> None:
-        # Return bet
-        self.chips += self.bet
-        self.bet = 0
+    def settle_blackjack(self) -> None:
+        # Payout 3:2 (return bet + 1.5x profit)
+        self.bankroll += self.current_bet * 2.5
+        self.current_bet = 0.0
 
-    def lose(self) -> None:
-        # Bet already deducted
-        self.bet = 0
+    def settle_push(self) -> None:
+        # Return bet only
+        self.bankroll += self.current_bet
+        self.current_bet = 0.0
 
-    def blackjack_payout(self) -> None:
-        # Pay 3:2 for blackjack
-        winnings = int(self.bet * 1.5)
-        self.chips += self.bet + winnings
-        self.bet = 0
+    def settle_loss(self) -> None:
+        # Bet already removed
+        self.current_bet = 0.0
+
+
+class Dealer:
+    def __init__(self) -> None:
+        self.hand = Hand()
+
+    def clear_hand(self) -> None:
+        self.hand.clear()
 
 
 class Game:
-    def __init__(self, chips: int, decks: int, min_bet: int) -> None:
-        if chips <= 0:
-            raise ValueError("Starting chips must be positive")
-        if decks <= 0:
-            raise ValueError("Number of decks must be positive")
-        if min_bet <= 0:
-            raise ValueError("Minimum bet must be positive")
-        self.deck = Deck(num_decks=decks)
-        self.player = Player(name="Player", chips=chips)
-        self.dealer_hand = Hand()
+    """Blackjack game controller implementing round flow (Step 7)."""
+
+    def __init__(self, num_decks: int = 6, bankroll: float = 100.0, min_bet: float = 1.0) -> None:
+        self.deck = Deck(num_decks=num_decks)
+        self.player = Player(name="Player", bankroll=bankroll)
+        self.dealer = Dealer()
         self.min_bet = min_bet
 
-    def print_state(self, hide_dealer_hole: bool = True) -> None:
-        if hide_dealer_hole and len(self.dealer_hand.cards) > 0:
-            if len(self.dealer_hand.cards) >= 2:
-                upcard = str(self.dealer_hand.cards[0])
-                print(f"Dealer: {upcard}, [hidden]")
-            else:
-                print(f"Dealer: {self.dealer_hand}")
-        else:
-            print(f"Dealer: {self.dealer_hand} (total: {self.dealer_hand.values()})")
-        print(f"You: {self.player.hand} (total: {self.player.hand.values()})")
-        print(f"Chips: {self.player.chips}")
+    def _format_hand(self, hand: Hand, hide_second_card: bool = False) -> str:
+        if not hide_second_card or len(hand.cards) <= 1:
+            return str(hand)
+        return f"{hand.cards[0]} [Hidden]"
 
-    def prompt_bet(self) -> Optional[int]:
+    def display_table(self, hide_dealer_hole: bool = True) -> None:
+        print("\n=== Current Table ===")
+        dealer_hand_str = self._format_hand(self.dealer.hand, hide_second_card=hide_dealer_hole)
+        if hide_dealer_hole:
+            # Show partial total for dealer (only upcard value if it's not an Ace properly? Keep simple: show '?')
+            print(f"Dealer: {dealer_hand_str}")
+        else:
+            print(f"Dealer: {dealer_hand_str} (Total: {self.dealer.hand.total()})")
+        print(f"{self.player.name}: {self.player.hand} (Total: {self.player.hand.total()})")
+        print("====================\n")
+
+    def prompt_bet(self) -> Optional[float]:
         while True:
-            raw = input(f"Place your bet (min {self.min_bet}, 'q' to quit): ").strip().lower()
-            if raw in ("q", "quit", "exit"):
+            raw = input(f"Enter bet (min {self.min_bet}, bankroll {self.player.bankroll:.2f}) or 'q' to quit: ").strip().lower()
+            if raw in {"q", "quit", "exit"}:
                 return None
             try:
-                amt = int(raw)
+                amt = float(raw)
             except ValueError:
-                print("Enter a valid integer amount.")
+                print("Invalid amount. Please enter a number.")
                 continue
             if amt < self.min_bet:
                 print(f"Bet must be at least {self.min_bet}.")
                 continue
-            if amt > self.player.chips:
-                print("You cannot bet more than your available chips.")
+            if amt > self.player.bankroll:
+                print("Bet cannot exceed current bankroll.")
                 continue
             return amt
 
     def initial_deal(self) -> None:
-        self.player.hand.clear()
-        self.dealer_hand.clear()
-        # Deal two cards each, player first
-        self.player.hand.add_card(self.deck.deal())
-        self.dealer_hand.add_card(self.deck.deal())
-        self.player.hand.add_card(self.deck.deal())
-        self.dealer_hand.add_card(self.deck.deal())
+        # Player gets 2 up, Dealer gets 1 up + 1 down (represented by hide flag in display)
+        self.player.hand.add_card(self.deck.draw())
+        self.dealer.hand.add_card(self.deck.draw())  # upcard
+        self.player.hand.add_card(self.deck.draw())
+        self.dealer.hand.add_card(self.deck.draw())  # hole card
 
-    def player_turn(self) -> str:
-        # Returns outcome: 'bust', 'stand', 'blackjack-stand'
-        if self.player.hand.is_blackjack():
-            return 'blackjack-stand'
+    def check_naturals(self) -> bool:
+        player_bj = self.player.hand.is_blackjack()
+        dealer_bj = self.dealer.hand.is_blackjack()
+        if player_bj or dealer_bj:
+            # Reveal dealer hole card
+            self.display_table(hide_dealer_hole=False)
+            if player_bj and dealer_bj:
+                print("Both have Blackjack. Push.")
+                self.player.settle_push()
+            elif player_bj:
+                print("Blackjack! You win 3:2.")
+                self.player.settle_blackjack()
+            else:
+                print("Dealer has Blackjack. You lose.")
+                self.player.settle_loss()
+            return True
+        return False
+
+    def player_turn(self) -> None:
         while True:
-            self.print_state(hide_dealer_hole=True)
+            self.display_table(hide_dealer_hole=True)
+            if self.player.hand.is_bust():
+                print("You busted!")
+                return
             choice = input("Hit or Stand? [h/s]: ").strip().lower()
-            if choice in ("s", "stand"):
-                return 'stand'
-            if choice in ("h", "hit"):
-                self.player.hand.add_card(self.deck.deal())
-                if self.player.hand.is_bust():
-                    self.print_state(hide_dealer_hole=True)
-                    print("You busted!")
-                    return 'bust'
+            if choice in {"h", "hit"}:
+                self.player.hand.add_card(self.deck.draw())
                 continue
-            if choice in ("q", "quit", "exit"):
-                print("Finishing current hand then exiting...")
-                return 'stand'
-            print("Please enter 'h' or 's'.")
+            elif choice in {"s", "stand"}:
+                print("You stand.")
+                return
+            else:
+                print("Please enter 'h' to hit or 's' to stand.")
 
     def dealer_turn(self) -> None:
-        # Dealer stands on all 17 (including soft 17)
-        while self.dealer_hand.values() < 17:
-            self.dealer_hand.add_card(self.deck.deal())
-
-    def settle(self) -> None:
-        player_val = self.player.hand.values()
-        dealer_val = self.dealer_hand.values()
-        print(f"Dealer reveals: {self.dealer_hand} (total: {dealer_val})")
-        print(f"Your hand: {self.player.hand} (total: {player_val})")
-
-        if self.player.hand.is_bust():
-            print("You lose.")
-            self.player.lose()
-            return
-
-        if self.dealer_hand.is_bust():
-            print("Dealer busts. You win!")
-            self.player.win()
-            return
-
-        if player_val > dealer_val:
-            if self.player.hand.is_blackjack():
-                print("Blackjack! You win 3:2.")
-                self.player.blackjack_payout()
+        print("Dealer reveals hole card...")
+        self.display_table(hide_dealer_hole=False)
+        while True:
+            total, is_soft = self.dealer.hand.values()
+            if total <= 16:
+                print("Dealer hits.")
+                self.dealer.hand.add_card(self.deck.draw())
+                self.display_table(hide_dealer_hole=False)
+                if self.dealer.hand.is_bust():
+                    print("Dealer busts!")
+                    return
             else:
-                print("You win!")
-                self.player.win()
-        elif player_val < dealer_val:
-            print("You lose.")
-            self.player.lose()
+                # Stand on all 17s including soft 17 (S17), and naturally >=18
+                print("Dealer stands.")
+                return
+
+    def settle_outcome(self) -> None:
+        player_total = self.player.hand.total()
+        dealer_total = self.dealer.hand.total()
+        if self.player.hand.is_bust():
+            print("You busted. You lose.")
+            self.player.settle_loss()
+            return
+        if self.dealer.hand.is_bust():
+            print("Dealer busted. You win!")
+            self.player.settle_win()
+            return
+        if player_total > dealer_total:
+            print("You win!")
+            self.player.settle_win()
+        elif player_total < dealer_total:
+            print("Dealer wins. You lose.")
+            self.player.settle_loss()
         else:
             print("Push.")
-            self.player.push()
+            self.player.settle_push()
 
     def play_round(self) -> bool:
-        if self.deck.need_reshuffle():
+        # Ensure deck is ready
+        if self.deck.needs_reshuffle():
+            print("Reshuffling shoe...")
             self.deck.reshuffle()
-        if self.player.chips < self.min_bet:
-            print("You do not have enough chips to continue.")
-            return False
+
         bet = self.prompt_bet()
         if bet is None:
-            return False
+            return False  # Quit
         try:
             self.player.place_bet(bet)
         except ValueError as e:
             print(f"Bet error: {e}")
             return True
 
+        # Clear hands and deal
+        self.player.hand.clear()
+        self.dealer.hand.clear()
         self.initial_deal()
 
-        # Check for immediate blackjacks
-        if self.player.hand.is_blackjack():
-            if self.dealer_hand.is_blackjack():
-                print("Both you and the dealer have blackjack. Push.")
-                self.player.push()
-            else:
-                print("Blackjack! You win 3:2.")
-                self.player.blackjack_payout()
+        # Naturals check
+        if self.check_naturals():
             return True
 
-        outcome = self.player_turn()
-        if outcome == 'bust':
-            self.player.lose()
-            return True
+        # Player action loop
+        self.player_turn()
 
-        # Dealer plays
-        self.dealer_turn()
-        self.settle()
+        # Dealer logic if player hasn't busted
+        if not self.player.hand.is_bust():
+            self.dealer_turn()
+
+        # Settle results
+        self.display_table(hide_dealer_hole=False)
+        self.settle_outcome()
         return True
 
-    def loop(self) -> None:
-        print("Welcome to Blackjack!")
-        print(f"Starting chips: {self.player.chips}. Minimum bet: {self.min_bet}. Decks: {self.deck.num_decks}.")
-        try:
-            while True:
-                if not self.play_round():
-                    break
-                if self.player.chips <= 0:
-                    print("You are out of chips. Game over.")
-                    break
-                # Ask to continue
-                ans = input("Play another hand? [Y/n]: ").strip().lower()
-                if ans in ("n", "no", "q", "quit", "exit"):
-                    break
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-        finally:
-            print(f"Thanks for playing. You leave with {self.player.chips} chips.")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Terminal-based Blackjack")
-    parser.add_argument("--chips", type=int, default=100, help="Starting chips (default: 100)")
-    parser.add_argument("--decks", type=int, default=6, help="Number of decks in shoe (default: 6)")
-    parser.add_argument("--min-bet", type=int, default=10, help="Minimum bet per hand (default: 10)")
-    args = parser.parse_args()
-
-    if args.chips <= 0:
-        parser.error("--chips must be positive")
-    if args.decks <= 0:
-        parser.error("--decks must be positive")
-    if args.min_bet <= 0:
-        parser.error("--min-bet must be positive")
-    if args.min_bet > args.chips:
-        parser.error("--min-bet cannot exceed starting chips")
-
-    return args
-
-
-def main() -> None:
-    args = parse_args()
-    game = Game(chips=args.chips, decks=args.decks, min_bet=args.min_bet)
-    game.loop()
+    def run(self) -> None:
+        print("Welcome to Terminal Blackjack! Dealer stands on all 17s. No splits/doubles/insurance.")
+        while True:
+            if self.player.bankroll <= 0:
+                print("You're out of funds. Game over.")
+                break
+            keep_playing = self.play_round()
+            if not keep_playing:
+                break
+            print(f"Bankroll: {self.player.bankroll:.2f}")
+            # Ask to continue
+            cont = input("Play another round? [y/n]: ").strip().lower()
+            if cont not in {"y", "yes", ""}:
+                break
+        print(f"Thanks for playing! Final bankroll: {self.player.bankroll:.2f}")
 
 
 if __name__ == "__main__":
-    main()
+    game = Game(num_decks=6, bankroll=100.0, min_bet=1.0)
+    game.run()
