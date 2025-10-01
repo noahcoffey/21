@@ -1,51 +1,36 @@
-# Terminal Blackjack (Scaffold)
+# Dakboard Clone
 
-A terminal-based Blackjack game implemented in Python 3.8+ using only the standard library.
+## Project Setup
 
-This is Step 1/12 of the implementation: project scaffolding and initial code skeletons.
+This repository is the initial setup for the Dakboard Clone project.
 
-## Features (current step)
-- Project structure scaffold
-- Core models: Card, Deck, Hand (ace valuation algorithm included)
-- Minimal CLI entrypoint stub
+### Features
+- User authentication system with different user roles.
+- Drag-and-drop UI for layout design.
+- Widget integration API.
 
-## Requirements
-- Python 3.8+
-- Standard library only (random, argparse, unittest, etc.)
+## Installation
 
-## Setup
-1) Create a virtual environment (optional but recommended):
-   - macOS/Linux:
-     - python3 -m venv .venv
-     - source .venv/bin/activate
-   - Windows (PowerShell):
-     - py -3 -m venv .venv
-     - .venv\Scripts\Activate.ps1
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/dakboard-clone.git
+   ```
 
-2) Upgrade pip (optional):
-   - python -m pip install --upgrade pip
+2. Navigate into the project directory:
+   ```bash
+   cd dakboard-clone
+   ```
 
-No external dependencies are required at this step.
+3. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-## Run (CLI scaffold)
-- Run the CLI scaffold:
-  - python -m blackjack.blackjack --help
-  - python -m blackjack.blackjack --demo
+4. Run the application:
+   ```bash
+   python app.py
+   ```
 
-The demo deals example hands to showcase the deck and hand logic only; full gameplay will be added in subsequent steps.
+## Contributing
 
-## Testing
-- When tests are added, run using:
-  - python -m unittest
-
-## Project Structure (current)
-- README.md
-- blackjack/
-  - blackjack.py   (CLI skeleton)
-  - deck.py        (Card, Deck, Hand models)
-  - [player.py]    (planned)
-  - [tests/test_blackjack.py] (planned)
-
-## Notes
-- Ace valuation algorithm is implemented in Hand.total: aces start as 11 and are demoted to 1 as needed to avoid busting.
-- Future steps will add Player abstractions, dealer logic, full game loop, and comprehensive tests.
+Feel free to submit issues or pull requests.
