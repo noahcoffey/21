@@ -1,15 +1,10 @@
-from __future__ import annotations
-
 import random
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_HALF_UP, getcontext
-from typing import List, Optional
+from typing import List, Iterable
 
-# Configure Decimal for currency operations
-getcontext().prec = 28
 
-SUITS = ["Hearts", "Diamonds", "Clubs", "Spades"]
-RANKS = [
+SUITS = ("Hearts", "Diamonds", "Clubs", "Spades")
+RANKS = (
     "2",
     "3",
     "4",
@@ -23,345 +18,223 @@ RANKS = [
     "Q",
     "K",
     "A",
-]
+)
 
 
+def rank_value(rank: str) -> int:
+    if rank in ("J", "Q", "K"):
+        return 10
+    if rank == "A":
+        return 11
+    return int(rank)
+
+
+@dataclass(frozen=True)
 class Card:
-    def __init__(self, rank: str, suit: str) -> None:
-        self.rank = rank
-        self.suit = suit
+    rank: str
+    suit: str
 
     @property
     def value(self) -> int:
-        if self.rank in ("J", "Q", "K"):
-            return 10
-        if self.rank == "A":
-            return 11  # Ace initially as 11; Hand will adjust as needed
-        return int(self.rank)
+        return rank_value(self.rank)
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         return f"{self.rank} of {self.suit}"
 
 
+@dataclass
 class Hand:
-    def __init__(self) -> None:
-        self.cards: List[Card] = []
+    cards: List[Card] = field(default_factory=list)
 
     def add_card(self, card: Card) -> None:
         self.cards.append(card)
 
-    def values(self) -> int:
-        # Return best total <= 21, else smallest total
-        total = 0
-        aces = 0
-        for c in self.cards:
-            total += c.value
-            if c.rank == "A":
-                aces += 1
-        # Adjust aces from 11 to 1 as needed
+    def add_cards(self, cards: Iterable[Card]) -> None:
+        self.cards.extend(cards)
+
+    def value(self) -> int:
+        total = sum(c.value for c in self.cards)
+        # Adjust for Aces
+        aces = sum(1 for c in self.cards if c.rank == "A")
         while total > 21 and aces > 0:
             total -= 10
             aces -= 1
         return total
 
     def is_blackjack(self) -> bool:
-        return len(self.cards) == 2 and self.values() == 21
+        return len(self.cards) == 2 and self.value() == 21
 
     def is_bust(self) -> bool:
-        return self.values() > 21
+        return self.value() > 21
 
-    def is_soft(self) -> bool:
-        # Soft if contains an Ace counted as 11
-        total = 0
-        aces = 0
-        for c in self.cards:
-            total += c.value
-            if c.rank == "A":
-                aces += 1
-        # If we can reduce by 10 and still <=21, that ace counted as 11
-        return aces > 0 and total <= 21
+    def discard_all(self) -> List[Card]:
+        discarded = list(self.cards)
+        self.cards.clear()
+        return discarded
 
-    def __repr__(self) -> str:
-        return f"Hand({self.cards}, total={self.values()})"
+    def __str__(self) -> str:
+        joined = ", ".join(str(c) for c in self.cards)
+        return f"[{joined}] (value={self.value()})"
 
 
 class Deck:
     def __init__(self, num_decks: int = 1, reshuffle_threshold: int = 15) -> None:
-        self.num_decks = max(1, num_decks)
+        if num_decks < 1:
+            raise ValueError("num_decks must be >= 1")
+        if reshuffle_threshold < 1:
+            raise ValueError("reshuffle_threshold must be >= 1")
+        self.num_decks = num_decks
         self.reshuffle_threshold = reshuffle_threshold
-        self._cards: List[Card] = []
-        self._build_and_shuffle()
+        self._draw_pile: List[Card] = []
+        self._discard_pile: List[Card] = []
+        self._build_shoe()
+        self._shuffle_draw_pile()
 
-    def _build_and_shuffle(self) -> None:
-        self._cards = [
-            Card(rank, suit)
-            for _ in range(self.num_decks)
-            for suit in SUITS
-            for rank in RANKS
-        ]
-        random.shuffle(self._cards)
+    def _build_shoe(self) -> None:
+        self._draw_pile.clear()
+        for _ in range(self.num_decks):
+            for suit in SUITS:
+                for rank in RANKS:
+                    self._draw_pile.append(Card(rank=rank, suit=suit))
 
-    def draw(self) -> Card:
-        if len(self._cards) == 0:
-            self._build_and_shuffle()
-        return self._cards.pop()
+    def _shuffle_draw_pile(self) -> None:
+        random.shuffle(self._draw_pile)
 
-    def remaining(self) -> int:
-        return len(self._cards)
+    def cards_remaining(self) -> int:
+        return len(self._draw_pile)
 
-    def needs_reshuffle(self) -> bool:
-        return self.remaining() < self.reshuffle_threshold
+    def discard_pile_size(self) -> int:
+        return len(self._discard_pile)
 
-    def reshuffle(self) -> None:
-        self._build_and_shuffle()
+    def draw(self, n: int = 1) -> List[Card]:
+        if n < 1:
+            return []
+        drawn: List[Card] = []
+        for _ in range(n):
+            if not self._draw_pile:
+                # If draw pile is empty, attempt to reshuffle discards
+                self._reshuffle_from_discards()
+                if not self._draw_pile:
+                    raise RuntimeError("Cannot draw a card: both draw pile and discard pile are empty.")
+            drawn.append(self._draw_pile.pop())
+        return drawn
+
+    def discard(self, cards: Iterable[Card]) -> None:
+        # Add cards to discard pile; input order doesn't matter
+        for c in cards:
+            self._discard_pile.append(c)
+
+    def reshuffle_if_needed(self) -> None:
+        if self.cards_remaining() < self.reshuffle_threshold:
+            self._reshuffle_from_discards()
+
+    def _reshuffle_from_discards(self) -> None:
+        if not self._discard_pile:
+            return
+        # Move all discards to draw pile and shuffle
+        self._draw_pile.extend(self._discard_pile)
+        self._discard_pile.clear()
+        self._shuffle_draw_pile()
 
 
 @dataclass
-class Stats:
-    rounds: int = 0
-    wins: int = 0
-    losses: int = 0
-    pushes: int = 0
-    blackjacks: int = 0
-    total_bet: Decimal = Decimal("0.00")
-    net_won: Decimal = Decimal("0.00")  # positive means player profit
-
-
 class Player:
-    def __init__(self, name: str, chips: Decimal) -> None:
-        self.name = name
-        self.chips: Decimal = Player._to_money(chips)
-        self.stats = Stats()
+    name: str
+    hand: Hand = field(default_factory=Hand)
 
-    @staticmethod
-    def _to_money(amount: Decimal) -> Decimal:
-        if not isinstance(amount, Decimal):
-            amount = Decimal(str(amount))
-        return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-    def can_bet(self, amount: Decimal) -> bool:
-        amount = Player._to_money(amount)
-        return amount > 0 and self.chips >= amount
-
-    def place_bet(self, amount: Decimal) -> Decimal:
-        amount = Player._to_money(amount)
-        if amount <= 0:
-            raise ValueError("Bet must be positive")
-        if amount > self.chips:
-            raise ValueError("Insufficient chips for bet")
-        self.chips -= amount
-        self.stats.total_bet += amount
-        return amount
-
-    def settle(self, bet: Decimal, outcome: str) -> Decimal:
-        # outcome in {"blackjack", "win", "push", "loss"}
-        bet = Player._to_money(bet)
-        profit = Decimal("0.00")
-        self.stats.rounds += 1
-        if outcome == "blackjack":
-            # 3:2 payout + return bet
-            profit = (bet * Decimal(3) / Decimal(2)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            self.chips += bet + profit
-            self.stats.wins += 1
-            self.stats.blackjacks += 1
-            self.stats.net_won += profit
-        elif outcome == "win":
-            # 1:1 payout + return bet
-            profit = bet
-            self.chips += bet + profit
-            self.stats.wins += 1
-            self.stats.net_won += profit
-        elif outcome == "push":
-            # Return bet only
-            self.chips += bet
-            self.stats.pushes += 1
-            # net_won unchanged
-        elif outcome == "loss":
-            # Player already paid bet when placing it; nothing returned
-            self.stats.losses += 1
-            self.stats.net_won -= bet
-        else:
-            raise ValueError(f"Unknown outcome: {outcome}")
-        return profit
+    def reset_hand(self) -> List[Card]:
+        return self.hand.discard_all()
 
 
-class BlackjackGame:
-    def __init__(self, num_decks: int = 6, starting_chips: Decimal = Decimal("1000.00")) -> None:
-        self.deck = Deck(num_decks=num_decks)
-        self.player = Player(name="Player", chips=starting_chips)
-        self.dealer_hand: Optional[Hand] = None
-        self.player_hand: Optional[Hand] = None
+class Game:
+    def __init__(self, num_decks: int = 6, reshuffle_threshold: int = 15) -> None:
+        self.deck = Deck(num_decks=num_decks, reshuffle_threshold=reshuffle_threshold)
+        self.player = Player(name="Player")
+        self.dealer = Player(name="Dealer")
 
-    def _deal_initial(self) -> None:
-        self.player_hand = Hand()
-        self.dealer_hand = Hand()
-        # Two to player, two to dealer
-        self.player_hand.add_card(self.deck.draw())
-        self.dealer_hand.add_card(self.deck.draw())
-        self.player_hand.add_card(self.deck.draw())
-        self.dealer_hand.add_card(self.deck.draw())
+    def deal_initial(self) -> None:
+        # Each gets two cards, player first
+        for _ in range(2):
+            self.player.hand.add_card(self.deck.draw(1)[0])
+            self.dealer.hand.add_card(self.deck.draw(1)[0])
 
-    def _dealer_play(self) -> None:
-        assert self.dealer_hand is not None
-        # Dealer stands on all 17 (including soft)
-        while self.dealer_hand.values() < 17:
-            self.dealer_hand.add_card(self.deck.draw())
-
-    def _resolve_outcome(self, bet: Decimal) -> str:
-        assert self.player_hand is not None and self.dealer_hand is not None
-        player_total = self.player_hand.values()
-        dealer_total = self.dealer_hand.values()
-
-        # Player busts
-        if self.player_hand.is_bust():
-            return "loss"
-        # Dealer busts
-        if self.dealer_hand.is_bust():
-            return "win"
-        # Compare totals
-        if player_total > dealer_total:
-            # Note: Only two-card 21 is blackjack. If player reaches 21 with >2 cards, it's a standard win.
-            if self.player_hand.is_blackjack():
-                return "blackjack"
-            return "win"
-        if player_total < dealer_total:
-            return "loss"
-        # Push
-        return "push"
-
-    def _check_natural_blackjack_phase(self, bet: Decimal) -> Optional[str]:
-        # Returns outcome if round ends immediately due to naturals, else None
-        assert self.player_hand is not None and self.dealer_hand is not None
-        player_bj = self.player_hand.is_blackjack()
-        dealer_bj = self.dealer_hand.is_blackjack()
-        if player_bj and dealer_bj:
-            self.player.settle(bet, "push")
-            return "push"
-        if player_bj and not dealer_bj:
-            self.player.settle(bet, "blackjack")
-            return "blackjack"
-        if dealer_bj and not player_bj:
-            self.player.settle(bet, "loss")
-            return "loss"
-        return None
-
-    def run_round(self, bet: Decimal) -> dict:
-        # Reshuffle if deck running low
-        if self.deck.needs_reshuffle():
-            self.deck.reshuffle()
-
-        # Place bet
-        bet = Player._to_money(bet)
-        if not self.player.can_bet(bet):
-            raise ValueError("Cannot place bet: insufficient chips or invalid amount")
-        placed = self.player.place_bet(bet)
-
-        # Deal
-        self._deal_initial()
-
-        # Check naturals
-        immediate = self._check_natural_blackjack_phase(placed)
-        if immediate is not None:
-            return self._round_state(outcome=immediate, bet=bet)
-
-        # Player decision loop (simple terminal prompt)
-        while True:
-            # Auto-stand on 21 (but not blackjack since already handled)
-            if self.player_hand.values() >= 21:
-                break
-            action = self._prompt_action()
-            if action == "h":
-                self.player_hand.add_card(self.deck.draw())
-                if self.player_hand.is_bust():
-                    break
-            elif action == "s":
+    def player_turn(self) -> None:
+        # Simple strategy placeholder: hit until 16 or more
+        while self.player.hand.value() < 16:
+            self.player.hand.add_card(self.deck.draw(1)[0])
+            if self.player.hand.is_bust():
                 break
 
-        # Dealer plays if player didn't bust
-        if not self.player_hand.is_bust():
-            self._dealer_play()
+    def dealer_turn(self) -> None:
+        # Dealer stands on 17 or more (typical rule)
+        while self.dealer.hand.value() < 17:
+            self.dealer.hand.add_card(self.deck.draw(1)[0])
+            if self.dealer.hand.is_bust():
+                break
 
-        # Resolve
-        outcome = self._resolve_outcome(placed)
-        self.player.settle(placed, outcome)
-        return self._round_state(outcome=outcome, bet=bet)
+    def settle(self) -> str:
+        p_val = self.player.hand.value()
+        d_val = self.dealer.hand.value()
+        if self.player.hand.is_bust():
+            return "Dealer wins (player busts)"
+        if self.dealer.hand.is_bust():
+            return "Player wins (dealer busts)"
+        if p_val > d_val:
+            return "Player wins"
+        if d_val > p_val:
+            return "Dealer wins"
+        return "Push"
 
-    def _prompt_action(self) -> str:
-        # Minimal terminal prompt for hit/stand
-        while True:
-            raw = input("Hit or Stand? [h/s]: ").strip().lower()
-            if raw in ("h", "s"):
-                return raw
-            print("Please enter 'h' to hit or 's' to stand.")
+    def cleanup_round(self) -> None:
+        # Return all cards to discard, then reshuffle if threshold reached
+        player_discards = self.player.reset_hand()
+        dealer_discards = self.dealer.reset_hand()
+        self.deck.discard(player_discards)
+        self.deck.discard(dealer_discards)
+        # Trigger reshuffle conditionally based on remaining draw pile size
+        self.deck.reshuffle_if_needed()
 
-    def _round_state(self, outcome: str, bet: Decimal) -> dict:
-        assert self.player_hand is not None and self.dealer_hand is not None
-        return {
-            "outcome": outcome,
-            "bet": str(bet),
-            "player_hand": [str(c) for c in self.player_hand.cards],
-            "player_total": self.player_hand.values(),
-            "dealer_hand": [str(c) for c in self.dealer_hand.cards],
-            "dealer_total": self.dealer_hand.values(),
-            "player_chips": str(self.player.chips),
-            "stats": {
-                "rounds": self.player.stats.rounds,
-                "wins": self.player.stats.wins,
-                "losses": self.player.stats.losses,
-                "pushes": self.player.stats.pushes,
-                "blackjacks": self.player.stats.blackjacks,
-                "total_bet": str(self.player.stats.total_bet),
-                "net_won": str(self.player.stats.net_won),
-            },
-        }
+    def play_round(self, verbose: bool = False) -> str:
+        # Ensure deck is healthy before dealing
+        self.deck.reshuffle_if_needed()
 
+        self.deal_initial()
 
-def _choose_bet(player: Player) -> Decimal:
-    while True:
-        try:
-            raw = input(f"Enter bet (available {player.chips}): ").strip()
-            amt = Decimal(raw)
-            if amt <= 0:
-                print("Bet must be positive.")
-                continue
-            if amt > player.chips:
-                print("Insufficient chips.")
-                continue
-            return amt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        except Exception:
-            print("Invalid amount. Try again.")
+        if verbose:
+            print(f"Player: {self.player.hand}")
+            print(f"Dealer shows: {self.dealer.hand.cards[0]}")
 
+        # Player and Dealer turns
+        if not self.player.hand.is_blackjack():
+            self.player_turn()
+        if not self.player.hand.is_bust():
+            self.dealer_turn()
 
-def main() -> None:
-    print("Welcome to Terminal Blackjack! Payouts: Blackjack 3:2, Wins 1:1, Push returns bet.")
-    game = BlackjackGame(num_decks=6, starting_chips=Decimal("1000.00"))
-    while True:
-        if game.player.chips <= 0:
-            print("You are out of chips. Game over.")
-            break
-        try:
-            bet = _choose_bet(game.player)
-            result = game.run_round(bet)
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
-        except Exception as e:
-            print(f"Error: {e}")
-            continue
+        result = self.settle()
 
-        print("--- Round Result ---")
-        print(f"Player hand ({result['player_total']}): {', '.join(result['player_hand'])}")
-        print(f"Dealer hand ({result['dealer_total']}): {', '.join(result['dealer_hand'])}")
-        print(f"Outcome: {result['outcome'].upper()} | Chips: {result['player_chips']}")
-        print(
-            f"Stats -> Rounds: {result['stats']['rounds']}, W: {result['stats']['wins']}, L: {result['stats']['losses']}, P: {result['stats']['pushes']}, BJ: {result['stats']['blackjacks']}"
-        )
-        again = input("Play another round? [y/n]: ").strip().lower()
-        if again != "y":
-            break
+        if verbose:
+            print(f"Dealer: {self.dealer.hand}")
+            print(result)
+            print(f"Draw pile remaining before cleanup: {self.deck.cards_remaining()}")
+            print(f"Discard pile before cleanup: {self.deck.discard_pile_size()}")
 
-    print("Thanks for playing!")
+        # Return all cards to discard and possibly reshuffle
+        self.cleanup_round()
+
+        if verbose:
+            print(f"Draw pile after cleanup/reshuffle: {self.deck.cards_remaining()}")
+            print(f"Discard pile after cleanup/reshuffle: {self.deck.discard_pile_size()}\n")
+
+        return result
+
+    def run(self, num_rounds: int = 5, verbose: bool = True) -> None:
+        for i in range(1, num_rounds + 1):
+            if verbose:
+                print(f"--- Round {i} ---")
+            self.play_round(verbose=verbose)
 
 
 if __name__ == "__main__":
-    main()
+    # Example CLI run demonstrating deck lifecycle and reshuffling
+    game = Game(num_decks=6, reshuffle_threshold=15)
+    game.run(num_rounds=10, verbose=True)
